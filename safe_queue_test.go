@@ -1,126 +1,101 @@
 package safe_queue_test
 
 import (
-	"strconv"
-	"sync"
+	"math"
 	"testing"
 
 	"gitee.com/ivfzhou/safe-queue"
 )
 
-func TestPutGet(t *testing.T) {
-	d := safe_queue.New(4)
+var val = new(int)
 
-	if d.Cap() != 3 {
-		t.Fatal("Cap fail")
+func TestCommon(t *testing.T) {
+	q := safe_queue.New(8)
+	*val = 1
+
+	if q == nil {
+		t.Fatal("q == nil")
+	}
+	if q.Cap() != 8 {
+		t.Fatal("Cap != 8")
 	}
 
-	s1 := "Hello1"
-	s2 := "Hello2"
-	s3 := "Hello3"
-	remian, err := d.Put(s1)
-	if err != nil || remian != 2 {
+	remain, err := q.Put(val)
+	if err != nil {
 		t.Fatal(err)
 	}
-	remian, err = d.Put(s2)
-	if err != nil || remian != 1 {
+	if remain != 7 {
+		t.Fatal("remain != 7")
+	}
+
+	if q.Len() != 1 {
+		t.Fatal("Len != 1")
+	}
+	for i := 0; i < 7; i++ {
+		_, _ = q.Put(val)
+	}
+	if q.Len() != 8 {
+		t.Fatal("Len != 8")
+	}
+
+	remain, err = q.Put(val)
+	if err != safe_queue.ErrQueueIsFull {
+		t.Fatal("err != ErrQueueIsFull")
+	}
+
+	res, remain, err := q.Get()
+	if err != nil {
 		t.Fatal(err)
 	}
-	remian, err = d.Put(s3)
-	if err != nil || remian != 0 {
-		t.Fatal(err)
+	if res != val {
+		t.Fatal("res != val")
+	}
+	if remain != 7 {
+		t.Fatal("remain != 7")
 	}
 
-	if !d.IsFull() {
-		t.Fatal("is full fail")
+	if q.Len() != 7 {
+		t.Fatal("Len != 7")
 	}
-
-	if d.Len() != 3 {
-		t.Fatal("len fail")
+	for i := 0; i < 7; i++ {
+		_, _, _ = q.Get()
 	}
-
-	s, left, err := d.Get()
-	if s != s1 || err != nil || left != 2 {
-		t.Fatal("get1 fail")
-	}
-	s, left, err = d.Get()
-	if s != s2 || err != nil || left != 1 {
-		t.Fatal("get2 fail")
-	}
-	s, left, err = d.Get()
-	if s != s3 || err != nil || left != 0 {
-		t.Fatal("get3 fail")
-	}
-
-	if !d.IsEmpty() {
-		t.Fatal("is empty fail")
-	}
-
-	if d.Len() != 0 {
-		t.Fatal("len fail")
-	}
-
-	remian, err = d.Put(s1)
-	if err != nil || remian != 2 {
-		t.Fatal(err)
-	}
-	remian, err = d.Put(s2)
-	if err != nil || remian != 1 {
-		t.Fatal(err)
-	}
-	remian, err = d.Put(s3)
-	if err != nil || remian != 0 {
-		t.Fatal(err)
-	}
-
-	more, u, err := d.GetMore(3)
-	if len(more) != 3 || err != nil || u != 0 {
-		t.Fatal("get more")
+	if q.Len() != 0 {
+		t.Fatal("Len != 0")
 	}
 }
 
-func TestConcurrent(t *testing.T) {
-	d := safe_queue.New(2048)
-	wg := sync.WaitGroup{}
-	for i := 0; i < 2047; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := d.Put(i)
-			if err != nil {
-				t.Error("put " + strconv.Itoa(i))
-			}
-		}(i)
-	}
-	for i := 0; i < 1047; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, _, err := d.Get()
-			if err != nil {
-				t.Error("get " + strconv.Itoa(i))
-			}
-		}(i)
+func TestExtreme(t *testing.T) {
+	q := safe_queue.New(8)
+	times := math.MaxUint32 / 8
+	for i := 0; i < times; i++ {
+		for j := 0; j < 8; j++ {
+			_, _ = q.Put(val)
+		}
+		for j := 0; j < 8; j++ {
+			_, _, _ = q.Get()
+		}
 	}
 
-	for i := 0; i < 500; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, _, err := d.GetMore(2)
-			if err != nil {
-				t.Error("get " + strconv.Itoa(i))
-			}
-		}(i)
+	for i := 0; i < 8; i++ {
+		remain, err := q.Put(i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if remain != uint32(8-i-1) {
+			t.Fatal("remain != uint32(8-i-1)")
+		}
 	}
-	wg.Wait()
-	if d.Len() != 0 {
-		t.Fatal("fail")
+	for i := 0; i < 8; i++ {
+		res, remain, err := q.Get()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res != i {
+			t.Fatal("res != i")
+		}
+		if remain != uint32(8-i-1) {
+			t.Fatal("remain != uint32(8-i-1)")
+		}
 	}
-}
-
-func TestString(t *testing.T) {
-	d := safe_queue.New(3)
-	_, _ = d.Put("hello")
-	t.Log(d)
 }

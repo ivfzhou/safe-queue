@@ -1,8 +1,7 @@
-// Package safe_queue 这是一个高性能多线程安全的FIFO队列容器库。
+// Package safe_queue 这是一个高性能的多协程安全的 FIFO 队列。
 package safe_queue
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -10,58 +9,55 @@ import (
 )
 
 var (
-	// ErrFull 表明容器已满。
-	ErrFull = errors.New("队列已满")
-	// ErrEmpty 表明容器为空。
-	ErrEmpty = errors.New("队列已空")
+	// ErrQueueIsFull 表明队列已满。
+	ErrQueueIsFull = errors.New("队列已满")
+	// ErrQueueIsEmpty 表明队列为空。
+	ErrQueueIsEmpty = errors.New("队列为空")
 )
 
 type (
 	queue struct {
 		capacity, mask, head, tail uint32
-		data                       []element
+		elements                   []element
 	}
 	element struct {
-		putSeq, getSeq uint32
-		Value          interface{}
+		hadSet uint32
+		value  interface{}
 	}
 )
 
-// New 创建容器实例。
-// capacity 容器大概的容量，将调整为 2 的幂数。
+// New 创建队列。
+//
+// capacity 队列长度。
 func New(capacity uint32) *queue {
-	capacity = roundCapacity(capacity)
-	if capacity < 2 {
-		capacity = 2
+	if capacity == 0 {
+		return nil
 	}
 
 	instance := &queue{
 		capacity: capacity,
 		mask:     capacity - 1,
-		data:     make([]element, capacity),
+		elements: make([]element, capacity),
 	}
-
-	for i := range instance.data {
-		instance.data[i].getSeq = uint32(i)
-		instance.data[i].putSeq = uint32(i)
-	}
-	instance.data[0].getSeq = capacity
-	instance.data[0].putSeq = capacity
 
 	return instance
 }
 
-// Put 向容器填充数据。返回剩余可填充数据个数，若容器已满返回错误 ErrFull。
-func (q *queue) Put(val interface{}) (uint32, error) {
+// Put 向队列尾部填充数据。
+//
+// uint32 返回剩余可填充数据个数。
+//
+// error 若队列已满返回错误 ErrQueueIsFull。
+func (q *queue) Put(value interface{}) (uint32, error) {
 	position := uint32(0)
-	remain := uint32(0)
+	used := uint32(0)
 	for {
 		head := atomic.LoadUint32(&q.head)
 		tail := atomic.LoadUint32(&q.tail)
 		position = tail + 1
-		remain = position - head
-		if remain > q.mask {
-			return 0, ErrFull
+		used = position - head
+		if used > q.capacity || used == 0 {
+			return 0, ErrQueueIsFull
 		}
 		if atomic.CompareAndSwapUint32(&q.tail, tail, position) {
 			break
@@ -69,31 +65,36 @@ func (q *queue) Put(val interface{}) (uint32, error) {
 		runtime.Gosched()
 	}
 
-	elem := &q.data[position&q.mask]
+	elem := &q.elements[position&q.mask]
 	for {
-		getSeq := atomic.LoadUint32(&elem.getSeq)
-		putSeq := atomic.LoadUint32(&elem.putSeq)
-		if position == putSeq && position == getSeq {
+		hadSet := atomic.LoadUint32(&elem.hadSet)
+		if hadSet == 0 {
 			break
 		}
 		runtime.Gosched()
 	}
-	elem.Value = val
-	atomic.AddUint32(&elem.putSeq, q.capacity)
+	elem.value = value
+	atomic.StoreUint32(&elem.hadSet, 1)
 
-	return q.mask - remain, nil
+	return q.capacity - used, nil
 }
 
-// Get 取出容器数据。返回剩余可取个数，当无数据可取时返回错误 ErrEmpty。
+// Get 取出队列头部数据。
+//
+// interface{} 返回队列数据。
+//
+// uint32 队列剩余可取个数。
+//
+// error 当无数据可取时返回错误 ErrQueueIsEmpty。
 func (q *queue) Get() (interface{}, uint32, error) {
 	position := uint32(0)
-	leave := uint32(0)
+	used := uint32(0)
 	for {
 		head := atomic.LoadUint32(&q.head)
 		tail := atomic.LoadUint32(&q.tail)
-		leave = tail - head
-		if leave <= 0 {
-			return nil, 0, ErrEmpty
+		used = tail - head
+		if used == 0 {
+			return nil, 0, ErrQueueIsEmpty
 		}
 		if atomic.CompareAndSwapUint32(&q.head, head, head+1) {
 			position = head + 1
@@ -102,10 +103,10 @@ func (q *queue) Get() (interface{}, uint32, error) {
 		runtime.Gosched()
 	}
 
-	return q.getOne(position), leave - 1, nil
+	return q.get(position), used - 1, nil
 }
 
-// GetMore 取出多个容器数据。返回剩余可取个数，当无任何数据可取时返回错误 ErrEmpty。
+// GetMore 取出多个容器数据。返回剩余可取个数，当无任何数据可取时返回错误 ErrQueueIsEmpty。
 // num 欲取出的数据个数。
 func (q *queue) GetMore(num uint32) ([]interface{}, uint32, error) {
 	position := uint32(0)
@@ -116,7 +117,7 @@ func (q *queue) GetMore(num uint32) ([]interface{}, uint32, error) {
 		tail := atomic.LoadUint32(&q.tail)
 		left = tail - head
 		if left <= 0 {
-			return nil, 0, ErrEmpty
+			return nil, 0, ErrQueueIsEmpty
 		}
 		if size > left {
 			size = left
@@ -130,61 +131,65 @@ func (q *queue) GetMore(num uint32) ([]interface{}, uint32, error) {
 
 	res := make([]interface{}, 0, size)
 	for i := position; i < position+size; i++ {
-		res = append(res, q.getOne(i))
+		res = append(res, q.get(i))
 	}
 
 	return res, left - size, nil
 }
 
-// Cap 返回队列容量。
+// Cap 返回队列长度。
+//
+// uint32 队列长度。
 func (q *queue) Cap() uint32 {
-	return q.mask
+	return q.capacity
 }
 
 // Len 返回队列数据个数。
+//
+// 此时队列数据个数。
 func (q *queue) Len() uint32 {
 	return atomic.LoadUint32(&q.tail) - atomic.LoadUint32(&q.head)
 }
 
 // IsEmpty 判断队列是否有数据。
+//
+// bool 队列数据个数是否为零。
 func (q *queue) IsEmpty() bool {
 	return atomic.LoadUint32(&q.head) == atomic.LoadUint32(&q.tail)
 }
 
 // IsFull 判断队列是否已满。
+//
+// bool 队列数据个数是否已满。
 func (q *queue) IsFull() bool {
-	return atomic.LoadUint32(&q.tail)-atomic.LoadUint32(&q.head) >= q.mask
+	return atomic.LoadUint32(&q.tail)-atomic.LoadUint32(&q.head) == q.capacity
 }
 
-func (q *queue) getOne(position uint32) interface{} {
-	elem := &q.data[position&q.mask]
+func (q *queue) get(position uint32) interface{} {
+	elem := &q.elements[position&q.mask]
 	for {
-		getSeq := atomic.LoadUint32(&elem.getSeq)
-		putSeq := atomic.LoadUint32(&elem.putSeq)
-		if position == getSeq && position == putSeq-q.capacity {
+		hadSet := atomic.LoadUint32(&elem.hadSet)
+		if hadSet != 0 {
 			break
 		}
 		runtime.Gosched()
 	}
-	atomic.AddUint32(&elem.getSeq, q.capacity)
-	val := elem.Value
-	elem.Value = nil
+	val := elem.value
+	atomic.StoreUint32(&elem.hadSet, 0)
+	elem.value = nil
 	return val
 }
 
+// String 返回队列字符串表示形式值。
+//
+// string 队列字符串值。
 func (q *queue) String() string {
-	data, _ := json.Marshal(q.data)
-	return fmt.Sprintf(`{"queue":{"head":%q,"tail":%q,"cap":%q,"len":%q,"data":%s}}`,
-		atomic.LoadUint32(&q.head), atomic.LoadUint32(&q.tail), q.Cap(), q.Len(), data)
-}
-
-func roundCapacity(capacity uint32) uint32 {
-	capacity--
-	capacity |= capacity >> 1
-	capacity |= capacity >> 2
-	capacity |= capacity >> 4
-	capacity |= capacity >> 8
-	capacity |= capacity >> 16
-	capacity++
-	return capacity
+	if q == nil {
+		return `<nil>`
+	}
+	elems := make([]interface{}, len(q.elements))
+	for i, v := range q.elements {
+		elems[i] = v.value
+	}
+	return fmt.Sprintf(`{Len:%d Cap:%d Values:%v`, q.Len(), q.Cap(), elems)
 }
