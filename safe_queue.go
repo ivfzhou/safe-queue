@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
+	"sync"
 	"sync/atomic"
 )
 
@@ -21,9 +23,10 @@ var (
 )
 
 type (
-	queue struct {
+	Queue struct {
 		capacity, mask, head, tail uint32
 		elements                   []element
+		once                       sync.Once
 	}
 	element struct {
 		hadSet uint32
@@ -34,12 +37,12 @@ type (
 // New 创建队列。
 //
 // capacity 队列长度。
-func New(capacity uint32) *queue {
+func New(capacity uint32) *Queue {
 	if capacity == 0 {
 		return nil
 	}
 
-	instance := &queue{
+	instance := &Queue{
 		capacity: capacity,
 		mask:     capacity - 1,
 		elements: make([]element, capacity),
@@ -53,7 +56,8 @@ func New(capacity uint32) *queue {
 // uint32 返回剩余可填充数据个数。
 //
 // error 若队列已满返回错误 ErrQueueIsFull。
-func (q *queue) Put(value interface{}) (uint32, error) {
+func (q *Queue) Put(value interface{}) (uint32, error) {
+	q.init()
 	position := uint32(0)
 	used := uint32(0)
 	for {
@@ -82,7 +86,8 @@ func (q *queue) Put(value interface{}) (uint32, error) {
 // uint32 队列剩余可取个数。
 //
 // error 当无数据可取时返回错误 ErrQueueIsEmpty。
-func (q *queue) Get() (interface{}, uint32, error) {
+func (q *Queue) Get() (interface{}, uint32, error) {
+	q.init()
 	position := uint32(0)
 	used := uint32(0)
 	for {
@@ -111,7 +116,8 @@ func (q *queue) Get() (interface{}, uint32, error) {
 // uint32 返回剩余可填充数据个数。
 //
 // error 当数据个数大于队列长度时返回 ErrTooMoreValues。
-func (q *queue) PutMore(ctx context.Context, values ...interface{}) (uint32, error) {
+func (q *Queue) PutMore(ctx context.Context, values ...interface{}) (uint32, error) {
+	q.init()
 	if len(values) == 0 {
 		return 0, nil
 	}
@@ -160,7 +166,8 @@ func (q *queue) PutMore(ctx context.Context, values ...interface{}) (uint32, err
 // uint32 剩余可取数据个数。
 //
 // error 异常返回。
-func (q *queue) GetMore(ctx context.Context, num uint32) ([]interface{}, uint32, error) {
+func (q *Queue) GetMore(ctx context.Context, num uint32) ([]interface{}, uint32, error) {
+	q.init()
 	if num == 0 {
 		return nil, 0, nil
 	}
@@ -201,35 +208,35 @@ func (q *queue) GetMore(ctx context.Context, num uint32) ([]interface{}, uint32,
 // Cap 返回队列长度。
 //
 // uint32 队列长度。
-func (q *queue) Cap() uint32 {
+func (q *Queue) Cap() uint32 {
 	return q.capacity
 }
 
 // Len 返回队列数据个数。
 //
 // 此时队列数据个数。
-func (q *queue) Len() uint32 {
+func (q *Queue) Len() uint32 {
 	return atomic.LoadUint32(&q.tail) - atomic.LoadUint32(&q.head)
 }
 
 // IsEmpty 判断队列是否有数据。
 //
 // bool 队列数据个数是否为零。
-func (q *queue) IsEmpty() bool {
+func (q *Queue) IsEmpty() bool {
 	return atomic.LoadUint32(&q.head) == atomic.LoadUint32(&q.tail)
 }
 
 // IsFull 判断队列是否已满。
 //
 // bool 队列数据个数是否已满。
-func (q *queue) IsFull() bool {
+func (q *Queue) IsFull() bool {
 	return atomic.LoadUint32(&q.tail)-atomic.LoadUint32(&q.head) == q.capacity
 }
 
 // String 返回队列字符串表示形式值。
 //
 // string 队列字符串值。
-func (q *queue) String() string {
+func (q *Queue) String() string {
 	if q == nil {
 		return `<nil>`
 	}
@@ -240,7 +247,15 @@ func (q *queue) String() string {
 	return fmt.Sprintf(`{Len:%d Cap:%d Values:%v}`, q.Len(), q.Cap(), elems)
 }
 
-func (q *queue) get(position uint32) interface{} {
+func (q *Queue) init() {
+	q.once.Do(func() {
+		if q.capacity == 0 {
+			*q = *New(math.MaxUint32)
+		}
+	})
+}
+
+func (q *Queue) get(position uint32) interface{} {
 	elem := &q.elements[position&q.mask]
 	for {
 		hadSet := atomic.LoadUint32(&elem.hadSet)
@@ -255,7 +270,7 @@ func (q *queue) get(position uint32) interface{} {
 	return val
 }
 
-func (q *queue) put(position uint32, value interface{}) {
+func (q *Queue) put(position uint32, value interface{}) {
 	elem := &q.elements[position&q.mask]
 	for {
 		hadSet := atomic.LoadUint32(&elem.hadSet)
