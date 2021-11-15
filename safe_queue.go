@@ -2,6 +2,7 @@
 package safe_queue
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -13,6 +14,10 @@ var (
 	ErrQueueIsFull = errors.New("队列已满")
 	// ErrQueueIsEmpty 表明队列为空。
 	ErrQueueIsEmpty = errors.New("队列为空")
+	// ErrTooMoreValues PutMore 填充数据过多。
+	ErrTooMoreValues = errors.New("数据个数大于队列长度无法填充")
+	// ErrNotEnoughValues GetMore 欲取出数据个数太大。
+	ErrNotEnoughValues = errors.New("欲取出数据个数大于队列长度")
 )
 
 type (
@@ -65,16 +70,7 @@ func (q *queue) Put(value interface{}) (uint32, error) {
 		runtime.Gosched()
 	}
 
-	elem := &q.elements[position&q.mask]
-	for {
-		hadSet := atomic.LoadUint32(&elem.hadSet)
-		if hadSet == 0 {
-			break
-		}
-		runtime.Gosched()
-	}
-	elem.value = value
-	atomic.StoreUint32(&elem.hadSet, 1)
+	q.put(position, value)
 
 	return q.capacity - used, nil
 }
@@ -106,21 +102,86 @@ func (q *queue) Get() (interface{}, uint32, error) {
 	return q.get(position), used - 1, nil
 }
 
-// GetMore 取出多个容器数据。返回剩余可取个数，当无任何数据可取时返回错误 ErrQueueIsEmpty。
-// num 欲取出的数据个数。
-func (q *queue) GetMore(num uint32) ([]interface{}, uint32, error) {
+// PutMore 向队列填充多个数据。
+//
+// ctx 上下文。
+//
+// values 数据。
+//
+// uint32 返回剩余可填充数据个数。
+//
+// error 当数据个数大于队列长度时返回 ErrTooMoreValues。
+func (q *queue) PutMore(ctx context.Context, values ...interface{}) (uint32, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	if uint32(len(values)) > q.capacity {
+		return 0, ErrTooMoreValues
+	}
 	position := uint32(0)
-	left := uint32(0)
-	size := num
+	used := uint32(0)
+	size := uint32(len(values))
 	for {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		default:
+		}
 		head := atomic.LoadUint32(&q.head)
 		tail := atomic.LoadUint32(&q.tail)
-		left = tail - head
-		if left <= 0 {
-			return nil, 0, ErrQueueIsEmpty
+		position = tail + size
+		used = position - head
+		if used > q.capacity || used == 0 {
+			runtime.Gosched()
+			continue
 		}
-		if size > left {
-			size = left
+		if atomic.CompareAndSwapUint32(&q.tail, tail, tail+size) {
+			position = tail + 1
+			break
+		}
+		runtime.Gosched()
+	}
+
+	for i, j := position, 0; i < position+size; i, j = i+1, j+1 {
+		q.put(i, values[j])
+	}
+
+	return q.capacity - used, nil
+}
+
+// GetMore 从队列取出多个数据。返回剩余可取个数，当无任何数据可取时返回错误 ErrQueueIsEmpty。
+//
+// ctx 若上下文结束，error 返回 ctx.Err()。
+//
+// num 欲取出的数据个数。
+//
+// []interface{} 队列数据。
+//
+// uint32 剩余可取数据个数。
+//
+// error 异常返回。
+func (q *queue) GetMore(ctx context.Context, num uint32) ([]interface{}, uint32, error) {
+	if num == 0 {
+		return nil, 0, nil
+	}
+	if num > q.capacity {
+		return nil, 0, ErrNotEnoughValues
+	}
+	position := uint32(0)
+	used := uint32(0)
+	size := num
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		default:
+		}
+		head := atomic.LoadUint32(&q.head)
+		tail := atomic.LoadUint32(&q.tail)
+		used = tail - head
+		if used == 0 || size > used {
+			runtime.Gosched()
+			continue
 		}
 		if atomic.CompareAndSwapUint32(&q.head, head, head+size) {
 			position = head + 1
@@ -134,7 +195,7 @@ func (q *queue) GetMore(num uint32) ([]interface{}, uint32, error) {
 		res = append(res, q.get(i))
 	}
 
-	return res, left - size, nil
+	return res, used - size, nil
 }
 
 // Cap 返回队列长度。
@@ -165,6 +226,20 @@ func (q *queue) IsFull() bool {
 	return atomic.LoadUint32(&q.tail)-atomic.LoadUint32(&q.head) == q.capacity
 }
 
+// String 返回队列字符串表示形式值。
+//
+// string 队列字符串值。
+func (q *queue) String() string {
+	if q == nil {
+		return `<nil>`
+	}
+	elems := make([]interface{}, len(q.elements))
+	for i, v := range q.elements {
+		elems[i] = v.value
+	}
+	return fmt.Sprintf(`{Len:%d Cap:%d Values:%v}`, q.Len(), q.Cap(), elems)
+}
+
 func (q *queue) get(position uint32) interface{} {
 	elem := &q.elements[position&q.mask]
 	for {
@@ -180,16 +255,15 @@ func (q *queue) get(position uint32) interface{} {
 	return val
 }
 
-// String 返回队列字符串表示形式值。
-//
-// string 队列字符串值。
-func (q *queue) String() string {
-	if q == nil {
-		return `<nil>`
+func (q *queue) put(position uint32, value interface{}) {
+	elem := &q.elements[position&q.mask]
+	for {
+		hadSet := atomic.LoadUint32(&elem.hadSet)
+		if hadSet == 0 {
+			break
+		}
+		runtime.Gosched()
 	}
-	elems := make([]interface{}, len(q.elements))
-	for i, v := range q.elements {
-		elems[i] = v.value
-	}
-	return fmt.Sprintf(`{Len:%d Cap:%d Values:%v`, q.Len(), q.Cap(), elems)
+	elem.value = value
+	atomic.StoreUint32(&elem.hadSet, 1)
 }
