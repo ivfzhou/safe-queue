@@ -214,5 +214,5 @@ func TestConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	t.Log(q)
+	t.Log(q.Len())
 }
