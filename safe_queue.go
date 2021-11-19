@@ -1,4 +1,5 @@
 // Package safe_queue 这是一个高性能的多协程安全的 FIFO 队列。
+// TODO：极端情形下put回到上次put还未设置完的elem处，存在覆盖值问题。
 package safe_queue
 
 import (
@@ -24,29 +25,39 @@ var (
 
 type (
 	Queue struct {
-		capacity, mask, head, tail uint32
-		elements                   []element
-		once                       sync.Once
+		capacity, head, tail uint32
+		elements             []element
+		once                 sync.Once
 	}
 	element struct {
-		hadSet uint32
-		value  interface{}
+		getSeq, putSeq uint32
+		value          interface{}
 	}
 )
 
 // New 创建队列。
 //
-// capacity 队列长度。
+// capacity 队列长度。最大值为 1<<32-2。
+//
+// *Queue 队列对象。
 func New(capacity uint32) *Queue {
 	if capacity == 0 {
 		return nil
 	}
+	if capacity == math.MaxUint32 {
+		capacity = math.MaxUint32 - 1
+	}
 
 	instance := &Queue{
 		capacity: capacity,
-		mask:     capacity - 1,
 		elements: make([]element, capacity),
 	}
+	for i := range instance.elements {
+		instance.elements[i].putSeq = uint32(i)
+		instance.elements[i].getSeq = uint32(i)
+	}
+	instance.elements[0].putSeq = capacity
+	instance.elements[0].getSeq = capacity
 
 	return instance
 }
@@ -256,29 +267,21 @@ func (q *Queue) init() {
 }
 
 func (q *Queue) get(position uint32) interface{} {
-	elem := &q.elements[position&q.mask]
-	for {
-		hadSet := atomic.LoadUint32(&elem.hadSet)
-		if hadSet != 0 {
-			break
-		}
+	elem := &q.elements[position%q.capacity]
+	for !(position == atomic.LoadUint32(&elem.getSeq) && position == atomic.LoadUint32(&elem.putSeq)-q.capacity) {
 		runtime.Gosched()
 	}
 	val := elem.value
-	atomic.StoreUint32(&elem.hadSet, 0)
 	elem.value = nil
+	_ = atomic.AddUint32(&elem.getSeq, q.capacity)
 	return val
 }
 
 func (q *Queue) put(position uint32, value interface{}) {
-	elem := &q.elements[position&q.mask]
-	for {
-		hadSet := atomic.LoadUint32(&elem.hadSet)
-		if hadSet == 0 {
-			break
-		}
+	elem := &q.elements[position%q.capacity]
+	for !(position == atomic.LoadUint32(&elem.getSeq) && position == atomic.LoadUint32(&elem.putSeq)) {
 		runtime.Gosched()
 	}
 	elem.value = value
-	atomic.StoreUint32(&elem.hadSet, 1)
+	_ = atomic.AddUint32(&elem.putSeq, q.capacity)
 }

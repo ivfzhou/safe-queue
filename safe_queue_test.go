@@ -158,10 +158,11 @@ func TestMore(t *testing.T) {
 }
 
 func TestConcurrent(t *testing.T) {
-	q := safe_queue.New(24)
+	const capacity = 1<<16 - 1
+	q := safe_queue.New(capacity)
 	wg := sync.WaitGroup{}
 
-	for i := 0; i < 48; i++ {
+	for i := 0; i < capacity*2; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -174,7 +175,7 @@ func TestConcurrent(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 48; i++ {
+	for i := 0; i < capacity*2; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -187,7 +188,7 @@ func TestConcurrent(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 48; i += 4 {
+	for i := 0; i < capacity*2; i += 4 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -200,7 +201,7 @@ func TestConcurrent(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 48; i += 4 {
+	for i := 0; i < capacity*2; i += 4 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
