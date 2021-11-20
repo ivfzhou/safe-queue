@@ -2,6 +2,8 @@ package safe_queue_test
 
 import (
 	"math"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +167,25 @@ func TestEnough(t *testing.T) {
 	}
 }
 
+func TestMust(t *testing.T) {
+	q := safe_queue.New(8)
+	for i := 0; i < 8; i++ {
+		left := q.PutMust(i)
+		if left != uint32(7-i) {
+			t.Fatal("left != 7-i")
+		}
+	}
+	for i := 0; i < 8; i++ {
+		val, used := q.GetMust()
+		if used != uint32(7-i) {
+			t.Fatal("used != 7-i")
+		}
+		if val != i {
+			t.Fatal("val != i")
+		}
+	}
+}
+
 func TestUint32Overflow(t *testing.T) {
 	capacity := uint32(1 << 8)
 	q := safe_queue.New(capacity)
@@ -174,7 +195,7 @@ func TestUint32Overflow(t *testing.T) {
 			t.Log(q)
 		}
 	}()
-	times := math.MaxUint32 / capacity
+	times := uint32(1.1 * float64(math.MaxUint32/capacity))
 	for i := uint32(0); i < times; i++ {
 		for j := uint32(0); j < capacity; j++ {
 			left, err := q.Put(j + 1)
@@ -198,134 +219,52 @@ func TestUint32Overflow(t *testing.T) {
 			}
 		}
 	}
-	for j := uint32(0); j < capacity; j++ {
-		left, err := q.Put(j + 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if left != capacity-j-1 {
-			t.Fatal("left != capacity-j-1")
-		}
-	}
-	for j := uint32(0); j < capacity; j++ {
-		val, used, err := q.Get()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if used != capacity-j-1 {
-			t.Fatal("used != capacity-j-1")
-		}
-		if val != j+1 {
-			t.Fatal("val != j+1")
-		}
-	}
 	ticker.Stop()
-}
-
-/*func TestMore(t *testing.T) {
-	q := safe_queue.New(8)
-	leave, err := q.PutMore(context.Background(), 1, 2, 3, 4, 5, 6, 7, 8)
-	if err != nil {
-		t.Fatal(err)
+	if q.Len() != 0 {
+		t.Fatal("Len != 0")
 	}
-	if leave != 0 {
-		t.Fatal("leave != 0")
-	}
-	values, leave, err := q.GetMore(context.Background(), 8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leave != 0 {
-		t.Fatal("leave != 0")
-	}
-	for i, value := range values {
-		if i+1 != value.(int) {
-			t.Fatal("i != value")
-		}
-	}
-
-	leave, err = q.PutMore(context.Background(), 1, 2, 3, 4, 5, 6, 7, 8, 9)
-	if err != safe_queue.ErrTooMoreValues {
-		t.Fatal("err != ErrTooMoreValues")
-	}
-	values, leave, err = q.GetMore(context.Background(), 9)
-	if err != safe_queue.ErrNotEnoughValues {
-		t.Fatal("err != ErrNotEnoughValues")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	values, leave, err = q.GetMore(ctx, 8)
-	if err != ctx.Err() {
-		t.Fatal("err != ctx.Err()")
-	}
-
-	_, _ = q.PutMore(context.Background(), 1, 2, 3, 4, 5, 6)
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	leave, err = q.PutMore(ctx, 7, 8, 9)
-	if err != ctx.Err() {
-		t.Fatal("err != ctx.Err()")
-	}
+	t.Log(q)
 }
 
 func TestConcurrent(t *testing.T) {
-	const capacity = 1<<16 - 1
+	const capacity = 1 << 8
 	q := safe_queue.New(capacity)
 	wg := sync.WaitGroup{}
 
-	for i := 0; i < capacity*2; i++ {
+	for i := 0; i < capacity; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 		L1:
 			_, err := q.Put(i)
 			if err != nil {
-				time.Sleep(time.Millisecond)
+				runtime.Gosched()
+				time.Sleep(time.Millisecond * 50)
 				goto L1
 			}
 		}(i)
 	}
 
-	for i := 0; i < capacity*2; i++ {
+	for i := 0; i < capacity; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
+			preVal := 0
 		L1:
-			_, _, err := q.Get()
+			val, _, err := q.Get()
 			if err != nil {
-				time.Sleep(time.Millisecond)
+				runtime.Gosched()
+				time.Sleep(time.Millisecond * 50)
 				goto L1
 			}
-		}(i)
-	}
-
-	for i := 0; i < capacity*2; i += 4 {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-		L1:
-			_, err := q.PutMore(context.Background(), i, i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9)
-			if err != nil {
-				time.Sleep(time.Millisecond)
-				goto L1
+			v := val.(int)
+			if preVal > v {
+				t.Errorf("preVal%d > val%d", preVal, v)
 			}
-		}(i)
+		}()
 	}
-
-	for i := 0; i < capacity*2; i += 4 {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-		L1:
-			_, _, err := q.GetMore(context.Background(), 10)
-			if err != nil {
-				time.Sleep(time.Millisecond)
-				goto L1
-			}
-		}(i)
-	}
-
 	wg.Wait()
-	t.Log(q.Len())
-}*/
+	if q.Len() != 0 {
+		t.Fatal("Len != 0")
+	}
+}

@@ -1,5 +1,11 @@
 // Package safe_queue 这是一个高性能的多协程安全的 FIFO 队列。
-// TODO：极端情形下put回到上次put还未设置完的elem处，存在覆盖值问题。
+// TODO：设第一个put为put1，第二个为put2，第n个为putn。
+// TODO：设第一个get为get1，第二个为get2，第n个为getn。
+// TODO：设队列长度为uint32最大值max。
+// TODO：put1阻塞在设置value处。
+// TODO：接下来get1阻塞在设置value处，等待put1设置完值。
+// TODO：再接下来put2、put3...putmax。
+// TODO：此时put1和get1还在阻塞中，再put一下，队列为值将和put1为同一个位置，那么这种情形下将存在put1的值被覆盖问题。
 package safe_queue
 
 import (
@@ -19,10 +25,6 @@ var (
 	ErrQueueIsFull = errors.New("队列已满")
 	// ErrQueueIsEmpty 表明队列为空。
 	ErrQueueIsEmpty = errors.New("队列为空")
-	// ErrTooMoreValues PutMore 填充数据过多。
-	ErrTooMoreValues = errors.New("数据个数大于队列长度无法填充")
-	// ErrNotEnoughValues GetMore 欲取出数据个数太大。
-	ErrNotEnoughValues = errors.New("欲取出数据个数大于队列长度")
 )
 
 type (
@@ -115,7 +117,7 @@ func (q *Queue) Get() (interface{}, uint32, error) {
 //
 // uint32 剩余可填充数据个数。
 //
-// error 当数据个数大于队列长度时返回 ErrTooMoreValues。
+// error 队列已满时返回 ErrQueueIsFull。
 func (q *Queue) PutEnough(values ...interface{}) (uint32, uint32, error) {
 	size := uint32(len(values))
 	if size == 0 {
@@ -143,7 +145,7 @@ func (q *Queue) PutEnough(values ...interface{}) (uint32, uint32, error) {
 //
 // uint32 剩余可取数据个数。
 //
-// error 异常返回。
+// error 当队列为空时返回 ErrQueueIsEmpty。
 func (q *Queue) GetEnough(size uint32) ([]interface{}, uint32, uint32, error) {
 	if size == 0 {
 		return nil, 0, 0, nil
@@ -162,8 +164,45 @@ func (q *Queue) GetEnough(size uint32) ([]interface{}, uint32, uint32, error) {
 	return res, actualSize, used, nil
 }
 
-func (q *Queue) PutTimeout() {}
-func (q *Queue) GetTimeout() {}
+// PutMust 向队列中塞数据，若队列已满将等待。
+//
+// value 数据。
+//
+// uint32 返回剩余可填充数据个数。
+func (q *Queue) PutMust(value interface{}) uint32 {
+	var (
+		position, left uint32
+		err            error
+	)
+	for {
+		position, _, left, err = q.acquirePut(1)
+		if err == nil {
+			break
+		}
+	}
+	q.put(position, value)
+	return left
+}
+
+// GetMust 取出队列头部数据。，若队列无数据将等待。
+//
+// interface{} 返回队列数据。
+//
+// uint32 队列剩余可取个数。
+func (q *Queue) GetMust() (interface{}, uint32) {
+	var (
+		position, used uint32
+		err            error
+	)
+	for {
+		position, _, used, err = q.acquireGet(1)
+		if err == nil {
+			break
+		}
+	}
+	val := q.get(position)
+	return val, used
+}
 
 // Cap 返回队列长度。
 //
@@ -174,7 +213,7 @@ func (q *Queue) Cap() uint32 {
 
 // Len 返回队列数据个数。
 //
-// 此时队列数据个数。
+// uint32 此时队列数据个数。
 func (q *Queue) Len() uint32 {
 	return atomic.LoadUint32(&q.tail) - atomic.LoadUint32(&q.head)
 }
