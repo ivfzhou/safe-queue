@@ -1,11 +1,4 @@
-// Package safe_queue 这是一个高性能的多协程安全的 FIFO 队列。
-// TODO：设第一个put为put1，第二个为put2，第n个为putn。
-// TODO：设第一个get为get1，第二个为get2，第n个为getn。
-// TODO：设队列长度为uint32最大值max。
-// TODO：put1阻塞在设置value处。
-// TODO：接下来get1阻塞在设置value处，等待put1设置完值。
-// TODO：再接下来put2、put3...putmax。
-// TODO：此时put1和get1还在阻塞中，再put一下，队列为值将和put1为同一个位置，那么这种情形下将存在put1的值被覆盖问题。
+// Package safe_queue 一个高性能的多协程安全的 FIFO 队列。
 package safe_queue
 
 import (
@@ -29,29 +22,25 @@ var (
 
 type (
 	// Queue 队列结构体。使用 New 创建变量。
-	Queue struct {
+	Queue[E any] struct {
 		capacity, mask uint32
 		_              [cacheLinePadSize - 8]byte
 		head           uint32
 		_              [cacheLinePadSize - 4]byte
 		tail           uint32
 		_              [cacheLinePadSize - 4]byte
-		elements       []element
-		_              [cacheLinePadSize - unsafe.Sizeof([]element{})]byte
+		elements       []element[E]
+		_              [cacheLinePadSize - unsafe.Sizeof([]element[E]{})]byte
 	}
-	element struct {
+	element[E any] struct {
 		getSeq, putSeq uint32
-		value          interface{}
+		value          E
 		_              [cacheLinePadSize - 8 - 16]byte
 	}
 )
 
-// New 创建队列。
-//
-// capacity 队列长度。值将调整为以2为底的幂数，最小值为2。
-//
-// *Queue 队列对象。
-func New(capacity uint32) *Queue {
+// New 创建队列。capacity 队列长度。值将调整为以2为底的幂数，最小值为2，最大值为2^31。
+func New[E any](capacity uint32) *Queue[E] {
 	capacity--
 	capacity |= capacity >> 1
 	capacity |= capacity >> 2
@@ -64,9 +53,9 @@ func New(capacity uint32) *Queue {
 		capacity = 2
 	}
 
-	instance := &Queue{
+	instance := &Queue[E]{
 		capacity: capacity,
-		elements: make([]element, capacity),
+		elements: make([]element[E], capacity),
 		mask:     capacity - 1,
 	}
 	for i := range instance.elements {
@@ -79,12 +68,8 @@ func New(capacity uint32) *Queue {
 	return instance
 }
 
-// Put 向队列尾部填充数据。
-//
-// uint32 返回剩余可填充数据个数。
-//
-// error 若队列已满返回错误 ErrQueueIsFull。
-func (q *Queue) Put(value interface{}) (uint32, error) {
+// Put 向队列尾部填充数据。返回剩余可填充数据个数。若队列已满返回错误 ErrQueueIsFull。
+func (q *Queue[E]) Put(value E) (uint32, error) {
 	position, _, left, err := q.acquirePut(1)
 	if err != nil {
 		return 0, err
@@ -93,83 +78,56 @@ func (q *Queue) Put(value interface{}) (uint32, error) {
 	return left, nil
 }
 
-// Get 取出队列头部数据。
-//
-// interface{} 返回队列数据。
-//
-// uint32 队列剩余可取个数。
-//
-// error 当无数据可取时返回错误 ErrQueueIsEmpty。
-func (q *Queue) Get() (interface{}, uint32, error) {
+// Get 取出队列头部数据。返回队列数据，队列剩余可取个数。当无数据可取时返回错误 ErrQueueIsEmpty。
+func (q *Queue[E]) Get() (E, uint32, error) {
+	var val E
 	position, _, used, err := q.acquireGet(1)
 	if err != nil {
-		return nil, 0, err
+		return val, 0, err
 	}
-	val := q.get(position)
+	val = q.get(position)
 	return val, used, nil
 }
 
-// PutEnough 向队列填充多个数据。
-//
-// values 数据。
-//
-// uint32 实际填充数据个数。
-//
-// uint32 剩余可填充数据个数。
-//
-// error 队列已满时返回 ErrQueueIsFull。
-func (q *Queue) PutEnough(values ...interface{}) (uint32, uint32, error) {
+// PutEnough 向队列填充多个数据。返回实际填充数据个数，剩余可填充数据个数。
+func (q *Queue[E]) PutEnough(values ...E) (uint32, uint32) {
 	size := uint32(len(values))
 	if size == 0 {
-		return 0, 0, nil
+		return 0, q.Cap() - q.Len()
 	}
 	position, actualSize, left, err := q.acquirePut(size)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0
 	}
 
 	for i, j := position, 0; i < position+actualSize; i, j = i+1, j+1 {
 		q.put(i, values[j])
 	}
 
-	return actualSize, left, nil
+	return actualSize, left
 }
 
-// GetEnough 从队列取出多个数据。
-//
-// size 欲取出的数据个数。
-//
-// []interface{} 队列数据。
-//
-// uint32 实际取出数据个数。
-//
-// uint32 剩余可取数据个数。
-//
-// error 当队列为空时返回 ErrQueueIsEmpty。
-func (q *Queue) GetEnough(size uint32) ([]interface{}, uint32, uint32, error) {
+// GetEnough 从队列取出多个数据。返回队列队列数据，实际取出数据个数，剩余可取数据个数。
+func (q *Queue[E]) GetEnough(size uint32) ([]E, uint32, uint32) {
 	if size == 0 {
-		return nil, 0, 0, nil
+		return []E{}, 0, q.Cap() - q.Len()
 	}
 
 	position, actualSize, used, err := q.acquireGet(size)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0
 	}
 
-	res := make([]interface{}, 0, actualSize)
+	res := make([]E, 0, actualSize)
 	for i := position; i < position+actualSize; i++ {
 		res = append(res, q.get(i))
 	}
 
-	return res, actualSize, used, nil
+	return res, actualSize, used
 }
 
-// PutMust 向队列中塞数据，若队列已满将等待。
-//
-// value 数据。
-//
-// uint32 返回剩余可填充数据个数。
-func (q *Queue) PutMust(value interface{}) uint32 {
+// MustPut 向队列中塞数据，若队列已满将等待。返回剩余可填充数据个数。
+func (q *Queue[E]) MustPut(value E) uint32 {
 	var (
 		position, left uint32
 		err            error
@@ -184,12 +142,8 @@ func (q *Queue) PutMust(value interface{}) uint32 {
 	return left
 }
 
-// GetMust 取出队列头部数据。，若队列无数据将等待。
-//
-// interface{} 返回队列数据。
-//
-// uint32 队列剩余可取个数。
-func (q *Queue) GetMust() (interface{}, uint32) {
+// MustGet 取出队列头部数据。，若队列无数据将等待。返回队列数据，队列剩余可取个数。
+func (q *Queue[E]) MustGet() (E, uint32) {
 	var (
 		position, used uint32
 		err            error
@@ -205,50 +159,40 @@ func (q *Queue) GetMust() (interface{}, uint32) {
 }
 
 // Cap 返回队列长度。
-//
-// uint32 队列长度。
-func (q *Queue) Cap() uint32 {
+func (q *Queue[E]) Cap() uint32 {
 	return q.capacity
 }
 
 // Len 返回队列数据个数。
-//
-// uint32 此时队列数据个数。
-func (q *Queue) Len() uint32 {
+func (q *Queue[E]) Len() uint32 {
 	return atomic.LoadUint32(&q.tail) - atomic.LoadUint32(&q.head)
 }
 
 // IsEmpty 判断队列是否有数据。
-//
-// bool 队列数据个数是否为零。
-func (q *Queue) IsEmpty() bool {
+func (q *Queue[E]) IsEmpty() bool {
 	return atomic.LoadUint32(&q.head) == atomic.LoadUint32(&q.tail)
 }
 
 // IsFull 判断队列是否已满。
-//
-// bool 队列数据个数是否已满。
-func (q *Queue) IsFull() bool {
+func (q *Queue[E]) IsFull() bool {
 	return atomic.LoadUint32(&q.tail)-atomic.LoadUint32(&q.head) == q.capacity
 }
 
 // String 返回队列字符串表示形式值。
-//
-// string 队列字符串值。
-func (q *Queue) String() string {
+func (q *Queue[E]) String() string {
 	return fmt.Sprintf(`Queue: Head:%d Tail:%d Len:%d Cap:%d`,
 		atomic.LoadUint32(&q.head), atomic.LoadUint32(&q.tail), q.Len(), q.Cap())
 }
 
-func (q *Queue) usedSize(tail, head uint32) uint32 {
+func (q *Queue[E]) usedSize(tail, head uint32) uint32 {
 	return tail - head
 }
 
-func (q *Queue) leftSize(tail, head uint32) uint32 {
+func (q *Queue[E]) leftSize(tail, head uint32) uint32 {
 	return q.capacity - q.usedSize(tail, head)
 }
 
-func (q *Queue) acquirePut(size uint32) (uint32, uint32, uint32, error) {
+func (q *Queue[E]) acquirePut(size uint32) (uint32, uint32, uint32, error) {
 	var head, tail, left uint32
 
 	for {
@@ -268,7 +212,7 @@ func (q *Queue) acquirePut(size uint32) (uint32, uint32, uint32, error) {
 	}
 }
 
-func (q *Queue) acquireGet(size uint32) (uint32, uint32, uint32, error) {
+func (q *Queue[E]) acquireGet(size uint32) (uint32, uint32, uint32, error) {
 	var head, tail, used uint32
 
 	for {
@@ -288,18 +232,19 @@ func (q *Queue) acquireGet(size uint32) (uint32, uint32, uint32, error) {
 	}
 }
 
-func (q *Queue) get(position uint32) interface{} {
+func (q *Queue[E]) get(position uint32) E {
 	elem := &q.elements[position&q.mask]
 	for !(position == atomic.LoadUint32(&elem.getSeq) && position == atomic.LoadUint32(&elem.putSeq)-q.capacity) {
 		runtime.Gosched()
 	}
 	val := elem.value
-	elem.value = nil
+	var empty E
+	elem.value = empty
 	_ = atomic.AddUint32(&elem.getSeq, q.capacity)
 	return val
 }
 
-func (q *Queue) put(position uint32, value interface{}) {
+func (q *Queue[E]) put(position uint32, value E) {
 	elem := &q.elements[position&q.mask]
 	for !(position == atomic.LoadUint32(&elem.getSeq) && position == atomic.LoadUint32(&elem.putSeq)) {
 		runtime.Gosched()

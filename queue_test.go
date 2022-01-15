@@ -11,7 +11,7 @@ import (
 )
 
 func TestPutGet(t *testing.T) {
-	q := safe_queue.New(8)
+	q := safe_queue.New[int](1 << 3)
 	if q == nil {
 		t.Fatal("q == nil")
 	}
@@ -79,25 +79,16 @@ func TestPutGet(t *testing.T) {
 }
 
 func TestEnough(t *testing.T) {
-	q := safe_queue.New(8)
-	size, left, err := q.PutEnough(1, 2, 3, 4, 5, 6, 7, 8)
-	if err != nil {
-		t.Fatal(err)
-	}
+	q := safe_queue.New[int](8)
+	size, left := q.PutEnough(1, 2, 3, 4, 5, 6, 7, 8)
 	if size != 8 {
 		t.Fatal("size != 8")
 	}
 	if left != 0 {
 		t.Fatal("left != 0")
 	}
-	size, left, err = q.PutEnough(9)
-	if err != safe_queue.ErrQueueIsFull {
-		t.Fatal("err != ErrQueueIsFull")
-	}
-	vals, size, used, err := q.GetEnough(8)
-	if err != nil {
-		t.Fatal(err)
-	}
+	size, left = q.PutEnough(9)
+	vals, size, used := q.GetEnough(8)
 	if size != 8 {
 		t.Fatal("size != 8")
 	}
@@ -109,25 +100,16 @@ func TestEnough(t *testing.T) {
 			t.Fatal("v != i+1")
 		}
 	}
-	vals, size, used, err = q.GetEnough(1)
-	if err != safe_queue.ErrQueueIsEmpty {
-		t.Fatal("err != ErrQueueIsEmpty")
-	}
+	vals, size, used = q.GetEnough(1)
 
-	size, left, err = q.PutEnough(1, 2, 3, 4, 5, 6, 7, 8, 9)
-	if err != nil {
-		t.Fatal(err)
-	}
+	size, left = q.PutEnough(1, 2, 3, 4, 5, 6, 7, 8, 9)
 	if size != 8 {
 		t.Fatal("size != 8")
 	}
 	if left != 0 {
 		t.Fatal("left != 0")
 	}
-	vals, size, used, err = q.GetEnough(9)
-	if err != nil {
-		t.Fatal(err)
-	}
+	vals, size, used = q.GetEnough(9)
 	if size != 8 {
 		t.Fatal("size != 8")
 	}
@@ -140,20 +122,14 @@ func TestEnough(t *testing.T) {
 		}
 	}
 
-	size, left, err = q.PutEnough(1, 2, 3, 4, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
+	size, left = q.PutEnough(1, 2, 3, 4, 5)
 	if size != 5 {
 		t.Fatal("size != 5")
 	}
 	if left != 3 {
 		t.Fatal("left != 3")
 	}
-	vals, size, used, err = q.GetEnough(4)
-	if err != nil {
-		t.Fatal(err)
-	}
+	vals, size, used = q.GetEnough(4)
 	if size != 4 {
 		t.Fatal("size != 4")
 	}
@@ -168,15 +144,15 @@ func TestEnough(t *testing.T) {
 }
 
 func TestMust(t *testing.T) {
-	q := safe_queue.New(8)
+	q := safe_queue.New[int](8)
 	for i := 0; i < 8; i++ {
-		left := q.PutMust(i)
+		left := q.MustPut(i)
 		if left != uint32(7-i) {
 			t.Fatal("left != 7-i")
 		}
 	}
 	for i := 0; i < 8; i++ {
-		val, used := q.GetMust()
+		val, used := q.MustGet()
 		if used != uint32(7-i) {
 			t.Fatal("used != 7-i")
 		}
@@ -188,7 +164,7 @@ func TestMust(t *testing.T) {
 
 func TestUint32Overflow(t *testing.T) {
 	capacity := uint32(1 << 8)
-	q := safe_queue.New(capacity)
+	q := safe_queue.New[uint32](capacity)
 	ticker := time.NewTicker(time.Second * 3)
 	go func() {
 		for range ticker.C {
@@ -228,7 +204,7 @@ func TestUint32Overflow(t *testing.T) {
 
 func TestConcurrent(t *testing.T) {
 	const capacity = 1 << 8
-	q := safe_queue.New(capacity)
+	q := safe_queue.New[int](capacity)
 	wg := sync.WaitGroup{}
 
 	for i := 0; i < capacity; i++ {
@@ -257,9 +233,8 @@ func TestConcurrent(t *testing.T) {
 				time.Sleep(time.Millisecond * 50)
 				goto L1
 			}
-			v := val.(int)
-			if preVal > v {
-				t.Errorf("preVal%d > val%d", preVal, v)
+			if preVal > val {
+				t.Errorf("preVal%d > val%d", preVal, val)
 			}
 		}()
 	}
