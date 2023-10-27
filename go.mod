@@ -10,6 +10,6 @@
 
 module gitee.com/ivfzhou/safe-queue
 
-go 1.21
+go 1.18
 
-require golang.org/x/sys v0.12.0
+require golang.org/x/sys v0.13.0

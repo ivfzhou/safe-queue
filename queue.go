@@ -50,7 +50,7 @@ type (
 	}
 )
 
-// New 创建队列。capacity 队列长度。值将调整为以2为底的幂数，最小值为2，最大值为2^31。
+// New 创建队列。capacity 队列长度。值将调整为以2为底的幂数，最小值为2，最大值为2^31。最终队列容量将大于capacity。
 func New[E any](capacity uint32) *Queue[E] {
 	capacity--
 	capacity |= capacity >> 1

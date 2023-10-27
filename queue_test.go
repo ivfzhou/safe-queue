@@ -174,46 +174,6 @@ func TestMust(t *testing.T) {
 	}
 }
 
-func TestUint32Overflow(t *testing.T) {
-	capacity := uint32(1 << 8)
-	q := queue.New[uint32](capacity)
-	ticker := time.NewTicker(time.Second * 3)
-	go func() {
-		for range ticker.C {
-			t.Log(q)
-		}
-	}()
-	times := uint32(1.1 * float64(math.MaxUint32/capacity))
-	for i := uint32(0); i < times; i++ {
-		for j := uint32(0); j < capacity; j++ {
-			left, err := q.Put(j + 1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if left != capacity-j-1 {
-				t.Fatal("left != capacity-j-1")
-			}
-		}
-		for j := uint32(0); j < capacity; j++ {
-			val, used, err := q.Get()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if used != capacity-j-1 {
-				t.Fatal("used != capacity-j-1")
-			}
-			if val != j+1 {
-				t.Fatal("val != j+1")
-			}
-		}
-	}
-	ticker.Stop()
-	if q.Len() != 0 {
-		t.Fatal("Len != 0")
-	}
-	t.Log(q)
-}
-
 func TestConcurrent(t *testing.T) {
 	const capacity = 1 << 8
 	q := queue.New[int](capacity)
@@ -254,4 +214,44 @@ func TestConcurrent(t *testing.T) {
 	if q.Len() != 0 {
 		t.Fatal("Len != 0")
 	}
+}
+
+func TestUint32Overflow(t *testing.T) {
+	capacity := uint32(1 << 8)
+	q := queue.New[uint32](capacity)
+	ticker := time.NewTicker(time.Second * 3)
+	go func() {
+		for range ticker.C {
+			// t.Log(q)
+		}
+	}()
+	times := uint32(1.1 * float64(math.MaxUint32/capacity))
+	for i := uint32(0); i < times; i++ {
+		for j := uint32(0); j < capacity; j++ {
+			left, err := q.Put(j + 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if left != capacity-j-1 {
+				t.Fatal("left != capacity-j-1")
+			}
+		}
+		for j := uint32(0); j < capacity; j++ {
+			val, used, err := q.Get()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if used != capacity-j-1 {
+				t.Fatal("used != capacity-j-1")
+			}
+			if val != j+1 {
+				t.Fatal("val != j+1")
+			}
+		}
+	}
+	ticker.Stop()
+	if q.Len() != 0 {
+		t.Fatal("Len != 0")
+	}
+	// t.Log(q)
 }
