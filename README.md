@@ -1,8 +1,12 @@
-### 模块说明
+### 说明
 
 无锁并发安全可阻塞 FIFO 队列
 
-### 快速使用
+### 使用
+
+```shell
+go get gitee.com/ivfzhou/safe-queue@latest
+```
 
 ```golang
 // 定义元素类型
