@@ -1,8 +1,8 @@
-# 1. 说明
+# 一、说明
 
 无锁并发安全可阻塞 FIFO 队列
 
-# 2. 使用
+# 二、使用
 
 ```shell
 go get gitee.com/ivfzhou/safe-queue@latest
@@ -40,7 +40,3 @@ q.GetEnough(3)
 q.MustGet()
 
 ```
-
-# 3. 联系作者
-
-电邮：ivfzhou@126.com
