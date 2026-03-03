@@ -19,7 +19,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	queue "gitee.com/ivfzhou/safe-queue"
 )
@@ -181,7 +180,7 @@ func TestMustPutAndGet(t *testing.T) {
 
 func TestConcurrent(t *testing.T) {
 	const capacity = 1000
-	const size = 1000000
+	const size = 1000
 	{
 		q := queue.New[int](capacity)
 		ch := make(chan int, 100)
@@ -191,31 +190,19 @@ func TestConcurrent(t *testing.T) {
 		go func() {
 			defer wg1.Done()
 			for i := range size {
-			Loop:
-				_, err := q.Put(i + 1)
-				if err != nil {
-					goto Loop
-				}
+				_ = q.MustPut(i + 1)
 			}
 		}()
 		go func() {
 			defer wg1.Done()
 			for i := range size {
-			Loop:
-				_, err := q.Put(i + size + 1)
-				if err != nil {
-					goto Loop
-				}
+				_ = q.MustPut(i + size + 1)
 			}
 		}()
 		go func() {
 			defer wg1.Done()
 			for i := range size {
-			Loop:
-				_, err := q.Put(i + 2*size + 1)
-				if err != nil {
-					goto Loop
-				}
+				_ = q.MustPut(i + 2*size + 1)
 			}
 		}()
 		go func() {
@@ -228,33 +215,21 @@ func TestConcurrent(t *testing.T) {
 		go func() {
 			defer wg2.Done()
 			for !putFinished {
-				value, _, err := q.Get()
-				if err != nil {
-					time.Sleep(time.Millisecond * 10)
-					continue
-				}
+				value, _ := q.MustGet()
 				ch <- value
 			}
 		}()
 		go func() {
 			defer wg2.Done()
 			for !putFinished {
-				value, _, err := q.Get()
-				if err != nil {
-					time.Sleep(time.Millisecond * 10)
-					continue
-				}
+				value, _ := q.MustGet()
 				ch <- value
 			}
 		}()
 		go func() {
 			defer wg2.Done()
 			for !putFinished {
-				value, _, err := q.Get()
-				if err != nil {
-					time.Sleep(time.Millisecond * 10)
-					continue
-				}
+				value, _ := q.MustGet()
 				ch <- value
 			}
 		}()

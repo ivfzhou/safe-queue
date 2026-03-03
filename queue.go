@@ -34,14 +34,14 @@ var (
 type (
 	// Queue 队列结构体。使用 New 创建变量。
 	Queue[E any] struct {
-		capacity, mask uint32
-		_              [cacheLinePadSize - 8]byte
-		headIndex      uint32
-		_              [cacheLinePadSize - 4]byte
-		tailIndex      uint32
-		_              [cacheLinePadSize - 4]byte
-		elements       []element[E]
-		_              [cacheLinePadSize - unsafe.Sizeof([]element[E]{})]byte
+		capacity  uint32
+		_         [cacheLinePadSize - 8]byte
+		headIndex uint32
+		_         [cacheLinePadSize - 4]byte
+		tailIndex uint32
+		_         [cacheLinePadSize - 4]byte
+		elements  []element[E]
+		_         [cacheLinePadSize - unsafe.Sizeof([]element[E]{})]byte
 	}
 	element[E any] struct {
 		getSequence, putSequence uint32
@@ -59,7 +59,6 @@ func New[E any](capacity uint32) *Queue[E] {
 	instance := &Queue[E]{
 		capacity: capacity,
 		elements: make([]element[E], capacity),
-		mask:     capacity - 1,
 	}
 	for i := range instance.elements {
 		instance.elements[i].putSequence = uint32(i)
@@ -247,7 +246,7 @@ func (q *Queue[E]) acquireGet(wantSize uint32) (
 
 // 获取队列元素。
 func (q *Queue[E]) get(position uint32) E {
-	elem := &q.elements[position&q.mask]
+	elem := &q.elements[position%q.capacity]
 	for !(position == atomic.LoadUint32(&elem.getSequence) &&
 		position == atomic.LoadUint32(&elem.putSequence)-q.capacity) {
 		runtime.Gosched()
@@ -262,7 +261,7 @@ func (q *Queue[E]) get(position uint32) E {
 
 // 放入队列元素。
 func (q *Queue[E]) put(position uint32, value E) {
-	elem := &q.elements[position&q.mask]
+	elem := &q.elements[position%q.capacity]
 	for !(position == atomic.LoadUint32(&elem.getSequence) && position == atomic.LoadUint32(&elem.putSequence)) {
 		runtime.Gosched()
 	}
