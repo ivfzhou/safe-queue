@@ -279,10 +279,10 @@ func TestOverflow(t *testing.T) {
 		})
 	}
 	wg.Wait()
-
 	for count < maximum {
 		_, _ = q.Put(1)
 		_, _, _ = q.Get()
 		count++
 	}
+	t.Log(q.String())
 }
