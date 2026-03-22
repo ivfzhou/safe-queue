@@ -12,6 +12,6 @@ module gitee.com/ivfzhou/safe-queue
 
 go 1.26
 
-retract [v1.0.0, v1.0.4]
+retract [v1.0.0, v1.0.5]
 
 require golang.org/x/sys v0.41.0

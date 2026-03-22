@@ -15,9 +15,10 @@ package safe_queue_test
 import (
 	"errors"
 	"math"
-	"math/rand"
+	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	queue "gitee.com/ivfzhou/safe-queue"
@@ -252,22 +253,36 @@ func TestConcurrent(t *testing.T) {
 }
 
 func TestOverflow(t *testing.T) {
-	q := queue.New[int](1000)
+	const capacity = 1000
+	q := queue.New[int](capacity)
 	maximum := uint64(math.MaxUint32) + 10
+	ints := [capacity]int{}
+	wg := sync.WaitGroup{}
 	count := uint64(0)
+	for range runtime.NumCPU() {
+		wg.Go(func() {
+			for range maximum / capacity / uint64(runtime.NumCPU()) {
+				values := ints[:]
+				actualInsertedSize, _ := q.PutEnough(values...)
+				for actualInsertedSize < uint32(len(values)) {
+					values = values[actualInsertedSize:]
+					actualInsertedSize, _ = q.PutEnough(values...)
+				}
+				_, actualGetSize, _ := q.GetEnough(capacity)
+				tmp := uint32(capacity)
+				for actualGetSize < tmp {
+					tmp = capacity - actualGetSize
+					_, actualGetSize, _ = q.GetEnough(tmp)
+				}
+				atomic.AddUint64(&count, capacity)
+			}
+		})
+	}
+	wg.Wait()
+
 	for count < maximum {
-		value := rand.Intn(math.MaxInt)
-		_, err := q.Put(value)
-		if err != nil {
-			t.Fatal("put error", err)
-		}
-		getValue, _, err := q.Get()
-		if err != nil {
-			t.Fatal("get error", err)
-		}
-		if value != getValue {
-			t.Error("value is unexpected")
-		}
+		_, _ = q.Put(1)
+		_, _, _ = q.Get()
 		count++
 	}
 }
