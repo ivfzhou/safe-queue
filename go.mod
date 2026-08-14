@@ -14,4 +14,4 @@ go 1.26
 
 retract [v1.0.0, v1.0.6]
 
-require golang.org/x/sys v0.41.0
+require golang.org/x/sys v0.47.0

@@ -25,7 +25,6 @@
 go get gitee.com/ivfzhou/safe-queue@latest
 ```
 
-> **要求**：Go 1.26+
 
 # 四、快速开始
 
@@ -82,46 +81,70 @@ task, _ := q.MustGet()
 
 > 典型用法：配合 goroutine 构建生产者-消费者模型。
 
-# 五、API 参考
+# 五、使用场景
 
-### 创建队列
+本库适用于需要 **多线程并发读写** 且追求 **低延迟、高吞吐** 的场景，典型包括：
 
-| 方法 | 说明 |
-|------|------|
-| `New[E any](capacity uint32) *Queue[E]` | 创建指定容量的队列。容量会自动向上对齐到 2 的幂次方，最小值为 2 |
+## 1. 生产者-消费者任务队列（Worker Pool）
 
-### 写入操作
+将耗时任务投递到队列，由固定数量的 worker goroutine 并发消费，天然解决任务分发与负载均衡问题：
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `Put(value E)` | `(leftSize uint32, err error)` | 写入一个元素。成功返回剩余可写个数；队列为空时返回 `ErrQueueIsFull` |
-| `PutEnough(values ...E)` | `(actualInsertedSize uint32, leftSize uint32)` | 批量写入多个元素。返回实际写入个数和剩余可写个数；空间不足时会部分写入 |
-| `MustPut(value E)` | `(leftSize uint32)` | 写入一个元素，队列已满时自旋阻塞直到成功。返回剩余可写个数 |
+```go
+tasks := queue.New[*Job](1024)
 
-### 读取操作
+// 启动 N 个 worker 消费任务
+for i := 0; i < runtime.NumCPU(); i++ {
+    go func() {
+        for {
+            job, _ := tasks.MustGet() // 队列空时阻塞等待
+            job.Do()
+        }
+    }()
+}
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `Get()` | `(value E, usedSize uint32, err error)` | 读取一个元素。返回元素值、剩余可读个数；队列为空时返回 `ErrQueueIsEmpty` |
-| `GetEnough(size uint32)` | `(elements []E, actualGetSize uint32, leftSize uint32)` | 批量读取最多 size 个元素。返回元素切片、实际读取个数、剩余可读个数 |
-| `MustGet()` | `(value E, leftSize uint32)` | 读取一个元素，队列为空时自旋阻塞直到有数据。返回元素值和剩余可读个数 |
+// 生产者并发投递任务
+tasks.MustPut(&Job{...})
+```
 
-### 查询操作
+## 2. 日志采集与异步落盘
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `Cap()` | `uint32` | 返回队列总容量 |
-| `Len()` | `uint32` | 返回当前队列中的元素数量（原子读取） |
-| `IsEmpty()` | `bool` | 判断队列是否为空 |
-| `IsFull()` | `bool` | 判断队列是否已满 |
-| `String()` | `string` | 返回队列的状态字符串（Head/Tail/Len/Cap） |
+高并发请求产生的日志先写入内存队列，由后台 goroutine 批量取出并写入磁盘/远端，解耦业务逻辑与 IO 耗时：
 
-### 错误类型
+```go
+logQueue := queue.New[*LogEntry](1 << 16)
 
-| 变量 | 说明 |
-|------|------|
-| `ErrQueueIsFull` | 队列已满，无法继续写入 |
-| `ErrQueueIsEmpty` | 队列为空，无法继续读取 |
+// 业务方无阻塞地记录日志
+logQueue.Put(&LogEntry{Time: time.Now(), Msg: msg})
+
+// 后台批量落盘，减少 IO 次数
+go func() {
+    for {
+        batch, _, _ := logQueue.GetEnough(512)
+        flush(batch)
+    }
+}()
+```
+
+## 3. 事件驱动 / 消息分发缓冲
+
+作为事件源与消费者之间的中间缓冲，平滑上游突发流量，避免下游被瞬时洪峰压垮（削峰填谷）。
+
+## 4. 数据管道（Pipeline）各级之间的缓冲
+
+在流水线处理中，把每个处理阶段的输出接入队列，作为下一阶段的输入，实现各级并行解耦：
+
+```go
+stage1Out := queue.New[RawData](4096)
+stage2Out := queue.New[Result](4096)
+
+// Stage1 -> Stage2 -> Stage3 之间通过队列衔接
+```
+
+## 5. 高频消息 / 指标采集
+
+游戏服务器、实时交易、监控埋点等对延迟敏感的系统，利用无锁 + 缓存行优化避免锁竞争与伪共享带来的性能损耗。
+
+> 注意：`MustPut` / `MustGet` 采用自旋等待实现阻塞，适合持有时间极短、竞争强度高的场景；若单次处理耗时较长（如执行磁盘/网络 IO），建议配合 `Put` / `Get` 自行控制重试与退避策略，避免忙等占用 CPU。
 
 # 六、设计细节
 
